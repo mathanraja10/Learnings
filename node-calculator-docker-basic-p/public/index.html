@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#000000" />
+  <title>Calculator</title>
+  <style>
+    :root {
+      --bg: #000000;
+      --text: #ffffff;
+      --digit: #333333;
+      --digit-active: #737373;
+      --func: #a5a5a5;
+      --func-active: #d9d9d9;
+      --func-text: #000000;
+      --op: #ff9f0a;
+      --op-active: #fcc78d;
+      --gap: 14px;
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+    html, body { height: 100%; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", Roboto, Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: flex-end;
+      padding: 16px;
+      user-select: none;
+    }
+
+    .calculator {
+      width: 100%;
+      max-width: 380px;
+      display: flex;
+      flex-direction: column;
+      padding-bottom: 12px;
+    }
+
+    .display {
+      height: 120px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: flex-end;
+      padding: 0 10px 8px;
+      font-size: 84px;
+      font-weight: 300;
+      line-height: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .keys {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--gap);
+    }
+
+    .key {
+      aspect-ratio: 1 / 1;
+      border: none;
+      border-radius: 50%;
+      font: inherit;
+      font-size: 34px;
+      font-weight: 400;
+      color: var(--text);
+      background: var(--digit);
+      cursor: pointer;
+      transition: background-color 0.25s ease, color 0.25s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+    .key:focus-visible { outline: 3px solid #0a84ff; outline-offset: 2px; }
+
+    .key.digit:active,
+    .key.digit.pressed { background: var(--digit-active); transition: none; }
+
+    .key.func {
+      background: var(--func);
+      color: var(--func-text);
+      font-size: 30px;
+      font-weight: 500;
+    }
+    .key.func:active,
+    .key.func.pressed { background: var(--func-active); transition: none; }
+
+    .key.op {
+      background: var(--op);
+      font-size: 40px;
+    }
+    .key.op:active,
+    .key.op.pressed { background: var(--op-active); transition: none; }
+
+    /* Selected operator: white background, orange symbol (like iOS) */
+    .key.op.selected {
+      background: var(--text);
+      color: var(--op);
+    }
+
+    .key.zero {
+      grid-column: span 2;
+      aspect-ratio: auto;
+      border-radius: 999px;
+      justify-content: flex-start;
+      padding-left: calc((100% - var(--gap)) / 4 - 0.5ch);
+    }
+
+    .calculator.busy .key { cursor: progress; }
+  </style>
+</head>
+<body>
+  <main class="calculator" id="calculator">
+    <div class="display" id="display" aria-live="polite" aria-label="Result"><span id="display-text">0</span></div>
+
+    <div class="keys">
+      <button class="key func" data-action="clear" id="clear-key" aria-label="All clear">AC</button>
+      <button class="key func" data-action="sign" aria-label="Plus minus">±</button>
+      <button class="key func" data-action="percent" aria-label="Percent">%</button>
+      <button class="key op" data-op="divide" aria-label="Divide">÷</button>
+
+      <button class="key digit" data-digit="7">7</button>
+      <button class="key digit" data-digit="8">8</button>
+      <button class="key digit" data-digit="9">9</button>
+      <button class="key op" data-op="multiply" aria-label="Multiply">×</button>
+
+      <button class="key digit" data-digit="4">4</button>
+      <button class="key digit" data-digit="5">5</button>
+      <button class="key digit" data-digit="6">6</button>
+      <button class="key op" data-op="subtract" aria-label="Subtract">−</button>
+
+      <button class="key digit" data-digit="1">1</button>
+      <button class="key digit" data-digit="2">2</button>
+      <button class="key digit" data-digit="3">3</button>
+      <button class="key op" data-op="add" aria-label="Add">+</button>
+
+      <button class="key digit zero" data-digit="0">0</button>
+      <button class="key digit" data-action="decimal" aria-label="Decimal point">.</button>
+      <button class="key op" data-action="equals" aria-label="Equals">=</button>
+    </div>
+  </main>
+
+  <script>
+    const MAX_DIGITS = 9;
+    const BASE_FONT_SIZE = 84;
+
+    const calculatorEl = document.getElementById("calculator");
+    const displayEl = document.getElementById("display");
+    const displayTextEl = document.getElementById("display-text");
+    const clearKey = document.getElementById("clear-key");
+    const opKeys = document.querySelectorAll(".key[data-op]");
+
+    const state = {
+      current: "0",     // what the user is typing / last result, as a string
+      previous: null,   // left operand (number)
+      operator: null,   // "add" | "subtract" | "multiply" | "divide"
+      waiting: false,   // true right after an operator or "=" is pressed
+      lastOperand: null,// for repeated "=" presses
+      busy: false
+    };
+
+    // ---------- Formatting ----------
+
+    function roundResult(n) {
+      return Number(n.toPrecision(MAX_DIGITS));
+    }
+
+    function formatDisplay(str) {
+      if (str === "Error") return str;
+
+      const n = Number(str);
+      const abs = Math.abs(n);
+      if (abs !== 0 && (abs >= 1e9 || abs < 1e-8)) {
+        return n.toExponential(5).replace(/\.?0+e/, "e").replace("e+", "e");
+      }
+
+      const negative = str.startsWith("-");
+      const [intPart, decPart] = str.replace("-", "").split(".");
+      const withCommas = Number(intPart).toLocaleString("en-US");
+      let out = (negative ? "-" : "") + withCommas;
+      if (decPart !== undefined) out += "." + decPart;
+      return out;
+    }
+
+    function digitCount(str) {
+      return str.replace(/[^0-9]/g, "").length;
+    }
+
+    // ---------- Rendering ----------
+
+    function render() {
+      const text = formatDisplay(state.current);
+      displayTextEl.textContent = text;
+
+      // Shrink the font so long numbers still fit (20px = left + right padding)
+      const available = displayEl.clientWidth - 20;
+      let size = BASE_FONT_SIZE;
+      displayEl.style.fontSize = size + "px";
+      while (displayTextEl.offsetWidth > available && size > 30) {
+        size -= 2;
+        displayEl.style.fontSize = size + "px";
+      }
+
+      const showC = state.current !== "0" && !state.waiting;
+      clearKey.textContent = showC ? "C" : "AC";
+      clearKey.setAttribute("aria-label", showC ? "Clear" : "All clear");
+
+      opKeys.forEach((key) => {
+        key.classList.toggle("selected", state.waiting && key.dataset.op === state.operator);
+      });
+    }
+
+    // ---------- Server call ----------
+
+    async function compute(op, a, b) {
+      const params = new URLSearchParams({ a: String(a), b: String(b) });
+      const response = await fetch(`/${op}?${params}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Error");
+      return roundResult(data.result);
+    }
+
+    function showError() {
+      state.current = "Error";
+      state.previous = null;
+      state.operator = null;
+      state.lastOperand = null;
+      state.waiting = true;
+    }
+
+    async function runComputation(op, a, b) {
+      state.busy = true;
+      calculatorEl.classList.add("busy");
+      try {
+        const result = await compute(op, a, b);
+        state.current = String(result);
+        return result;
+      } catch {
+        showError();
+        return null;
+      } finally {
+        state.busy = false;
+        calculatorEl.classList.remove("busy");
+      }
+    }
+
+    // ---------- Actions ----------
+
+    function inputDigit(d) {
+      if (state.waiting || state.current === "Error") {
+        state.current = d;
+        state.waiting = false;
+      } else if (state.current === "0") {
+        state.current = d;
+      } else if (state.current === "-0") {
+        state.current = "-" + d;
+      } else if (digitCount(state.current) < MAX_DIGITS) {
+        state.current += d;
+      }
+    }
+
+    function inputDecimal() {
+      if (state.waiting || state.current === "Error") {
+        state.current = "0.";
+        state.waiting = false;
+      } else if (!state.current.includes(".") && digitCount(state.current) < MAX_DIGITS) {
+        state.current += ".";
+      }
+    }
+
+    function clear() {
+      if (state.current !== "0" && !state.waiting) {
+        state.current = "0";          // "C": clear current entry only
+      } else {
+        state.current = "0";          // "AC": reset everything
+        state.previous = null;
+        state.operator = null;
+        state.lastOperand = null;
+        state.waiting = false;
+      }
+    }
+
+    function toggleSign() {
+      if (state.current === "Error") return;
+      if (state.waiting) {
+        state.waiting = false;
+      }
+      state.current = state.current.startsWith("-")
+        ? state.current.slice(1)
+        : "-" + state.current;
+    }
+
+    function percent() {
+      if (state.current === "Error") return;
+      state.current = String(roundResult(Number(state.current) / 100));
+    }
+
+    function backspace() {
+      if (state.waiting || state.current === "Error") return;
+      state.current = state.current.slice(0, -1);
+      if (state.current === "" || state.current === "-") state.current = "0";
+    }
+
+    async function setOperator(op) {
+      if (state.current === "Error") return;
+      const value = Number(state.current);
+
+      if (state.operator && !state.waiting) {
+        // Chain: 2 + 3 × ... → evaluate 2 + 3 first
+        const result = await runComputation(state.operator, state.previous, value);
+        if (result === null) return;
+        state.previous = result;
+      } else {
+        state.previous = value;
+      }
+
+      state.operator = op;
+      state.lastOperand = null;
+      state.waiting = true;
+    }
+
+    async function equals() {
+      if (state.current === "Error") return;
+
+      if (state.operator) {
+        const b = state.waiting ? state.previous : Number(state.current);
+        const op = state.operator;
+        const result = await runComputation(op, state.previous, b);
+        if (result === null) return;
+        state.lastOperand = { op, b };
+        state.operator = null;
+        state.previous = result;
+        state.waiting = true;
+      } else if (state.lastOperand) {
+        // Pressing "=" again repeats the last operation (like iOS)
+        const { op, b } = state.lastOperand;
+        const result = await runComputation(op, Number(state.current), b);
+        if (result === null) return;
+        state.previous = result;
+        state.waiting = true;
+      }
+    }
+
+    async function handle(key) {
+      if (state.busy) return;
+
+      if (key.dataset.digit !== undefined) inputDigit(key.dataset.digit);
+      else if (key.dataset.op) await setOperator(key.dataset.op);
+      else {
+        switch (key.dataset.action) {
+          case "decimal": inputDecimal(); break;
+          case "clear":   clear(); break;
+          case "sign":    toggleSign(); break;
+          case "percent": percent(); break;
+          case "equals":  await equals(); break;
+        }
+      }
+      render();
+    }
+
+    // ---------- Events ----------
+
+    document.querySelector(".keys").addEventListener("click", (e) => {
+      const key = e.target.closest(".key");
+      if (key) handle(key);
+    });
+
+    const keyMap = {
+      "+": '[data-op="add"]',
+      "-": '[data-op="subtract"]',
+      "*": '[data-op="multiply"]',
+      "x": '[data-op="multiply"]',
+      "/": '[data-op="divide"]',
+      "Enter": '[data-action="equals"]',
+      "=": '[data-action="equals"]',
+      ".": '[data-action="decimal"]',
+      ",": '[data-action="decimal"]',
+      "%": '[data-action="percent"]',
+      "Escape": '[data-action="clear"]',
+      "Delete": '[data-action="clear"]'
+    };
+
+    document.addEventListener("keydown", (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      if (e.key === "Backspace") {
+        e.preventDefault();
+        if (!state.busy) { backspace(); render(); }
+        return;
+      }
+
+      const selector = /^[0-9]$/.test(e.key) ? `[data-digit="${e.key}"]` : keyMap[e.key];
+      if (!selector) return;
+
+      e.preventDefault();
+      const key = document.querySelector(selector);
+      key.classList.add("pressed");
+      setTimeout(() => key.classList.remove("pressed"), 120);
+      handle(key);
+    });
+
+    window.addEventListener("resize", render);
+    render();
+  </script>
+</body>
+</html>
