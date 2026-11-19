@@ -10,6 +10,7 @@ This repo tracks my hands-on learning tasks. Each folder holds one task, with it
 |---|------|--------|--------|
 | 1 | [day1-lab](day1-lab/) | Express, async error handling, event loop blocking, worker threads, VS Code debugging | ✅ Completed |
 | 2 | [node-calculator-docker-basic-p](node-calculator-docker-basic-p/) | Node `http` module, REST API, input validation, static UI, Docker | ✅ Completed |
+| 3 | [day2-lab](day2-lab/) | Heap snapshots, closure and event-listener leaks, `EXPLAIN ANALYZE`, composite indexes, PostgreSQL connection pool tuning | ✅ Completed |
 
 ---
 
@@ -102,6 +103,56 @@ Then open http://localhost:8000.
 
 ---
 
+## 3. day2-lab: memory leaks and PostgreSQL profiling
+
+An Express + PostgreSQL API built to reproduce memory leaks, find a slow query, and observe connection pool behaviour. Full write-up in [day2-lab/NOTES.md](day2-lab/NOTES.md).
+
+### What it covers
+
+| Route | Purpose |
+|-------|---------|
+| `GET /leak/closure?id=` | **Leak 1:** a closure stored in a global array keeps each `ReportData` (and its 10,000-item array) alive. |
+| `GET /leak/listener?id=` | **Leak 2:** a listener added to an `EventEmitter` on every request retains its `RequestContext`. Fixed by calling `bus.off` on `res` `finish`. |
+| `GET /orders?customer=&status=` | Slow query on a 1M-row `orders` table. Logs `SLOW QUERY` when it takes over 50 ms. |
+| `GET /slow` | Holds a pool connection for 50 ms (`pg_sleep`), used for pool load tests. |
+| `GET /pool` | Reports pool `total`, `idle` and `waiting` counts. |
+| `GET /debug` | Shows the number of `config-changed` listeners, to confirm the listener leak is fixed. |
+
+### Run it
+
+```bash
+cd day2-lab
+npm install
+docker start pg                      # PostgreSQL container (password: dev)
+psql -f seed.sql                     # create and fill the orders table (1M rows)
+node server.js                       # API on http://localhost:3000
+```
+
+Heap snapshots: run `node --inspect server.js` and open `chrome://inspect`. Set the pool size with `POOL_MAX` (for example `set POOL_MAX=20 && node server.js` on Windows CMD).
+
+### Results
+
+| Check | Before | After |
+|-------|--------|-------|
+| `/orders` query | Parallel Seq Scan, 38.246 ms | Bitmap Index Scan, 0.425 ms (about 90× faster) |
+| Pool, 50 concurrent `/slow` requests | `POOL_MAX=10`: 10 busy, 39 waiting | `POOL_MAX=20`: 20 busy, 30 waiting |
+
+The fix for the slow query is a composite index that matches the filter and sort:
+
+```sql
+CREATE INDEX CONCURRENTLY idx_orders_cust_status_created
+ON orders (customer_id, status, created_at DESC);
+```
+
+### What I learned
+
+- A memory leak is an object that stays reachable. Heap snapshots show the retainer chain that keeps it alive.
+- Listeners and closures held by long-lived objects must be removed when the request ends.
+- Profile first with `EXPLAIN ANALYZE`, then add an index that matches the query's filter and sort.
+- Do not set the pool size to a big number. Load test, then watch `waiting`, DB CPU and RAM, and latency together.
+
+---
+
 ## Repo structure
 
 ```
@@ -116,10 +167,15 @@ Then open http://localhost:8000.
 │   ├── Dockerfile
 │   ├── server.js
 │   └── package.json
+├── day2-lab/
+│   ├── NOTES.md
+│   ├── seed.sql
+│   ├── server.js
+│   └── package.json
 └── README.md
 ```
 
 ## Prerequisites
 
 - Node.js 18 or later (the Docker image uses Node 24)
-- Docker (for task 2)
+- Docker (for tasks 2 and 3; task 3 runs PostgreSQL in a container)
