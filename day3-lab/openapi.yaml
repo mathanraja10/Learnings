@@ -1,0 +1,409 @@
+openapi: 3.0.3
+info:
+  title: Express 4 Orders & Users API
+  version: 1.0.0
+  description: |
+    OpenAPI 3.0.3 specification documenting the current implementation of the Express 4 backend API with PostgreSQL (`server.js`).
+    
+    > **SECURITY AUDIT NOTE**: This specification documents the *actual* observed behavior of the backend, including unauthenticated administrative endpoints, sensitive data leakage, and SQL injection vulnerabilities. Recommended security fixes and secure contract schemas are documented separately.
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+paths:
+  /users:
+    post:
+      summary: Register a new user
+      description: |
+        Registers a new user by hashing the provided password and inserting fields into the `users` table.
+        
+        **Security Warning:**
+        - **Mass Assignment:** Spreads all additional body properties (`...rest`) into the insert columns without filtering.
+        - **Data Leakage:** Returns `RETURNING *` including `password_hash`.
+      operationId: registerUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRegistrationRequest'
+            example:
+              email: "customer@example.com"
+              password: "SuperSecretPassword123"
+      responses:
+        '201':
+          description: User created successfully (reflects current implementation returning full DB row).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserCurrentResponse'
+              example:
+                id: 1
+                email: "customer@example.com"
+                password_hash: "$2a$10$abcdefghijklmnopqrstuv"
+                role: "user"
+        '500':
+          description: Internal server error or database constraint violation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "duplicate key value violates unique constraint \"users_email_key\""
+                stack: "error: duplicate key value violates unique constraint...\n    at ..."
+
+  /login:
+    post:
+      summary: User login
+      description: |
+        Authenticates a user via email and password using bcrypt comparison and issues a JWT token.
+        
+        **Security Warning:**
+        - Uses hardcoded `JWT_SECRET = 'secret123'`.
+        - Generates JWT without expiration (`expiresIn`).
+      operationId: loginUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: "customer@example.com"
+              password: "SuperSecretPassword123"
+      responses:
+        '200':
+          description: Successful authentication with issued JWT.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+              example:
+                token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MSwicm9sZSI6InVzZXIifQ.signature"
+        '401':
+          description: Invalid email or password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleErrorResponse'
+              example:
+                error: "Invalid credentials"
+        '500':
+          description: Server error (e.g. missing body attributes or database error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "data and hash arguments required"
+                stack: "Error: data and hash arguments required\n    at ..."
+
+  /orders:
+    get:
+      summary: List orders for current customer
+      description: |
+        Retrieves orders for the authenticated customer filtered by status (default 'paid'), up to 20 items.
+        
+        **Security Warning:**
+        - **Critical SQL Injection:** Directly interpolates `req.query.status` and `req.user.id` into raw SQL string without parameterization.
+      operationId: getMyOrders
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Order status filter (defaults to 'paid' if omitted).
+          schema:
+            type: string
+            default: paid
+          example: "paid"
+      responses:
+        '200':
+          description: List of orders matching customer ID and status (maximum 20).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
+              example:
+                - id: 101
+                  customer_id: 1
+                  status: "paid"
+                  amount: "150.00"
+                  created_at: "2026-11-19T09:00:00.000Z"
+        '401':
+          description: Unauthorized (missing or invalid JWT Bearer token).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleErrorResponse'
+              example:
+                error: "Unauthorized"
+        '500':
+          description: Server error (database error or SQL syntax error from injection).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "syntax error at or near \"...\""
+                stack: "error: syntax error at or near...\n    at ..."
+
+  /orders/{id}:
+    get:
+      summary: Get order details by ID
+      description: |
+        Retrieves a single order by its primary key ID.
+        
+        **Security Warning:**
+        - **Broken Object Level Authorization (BOLA / IDOR):** Any authenticated user can read any order in the database; there is no check comparing `customer_id` to `req.user.id`.
+      operationId: getOrderById
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Unique integer ID of the order.
+          schema:
+            type: integer
+          example: 101
+      responses:
+        '200':
+          description: Order details found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+              example:
+                id: 101
+                customer_id: 1
+                status: "paid"
+                amount: "150.00"
+                created_at: "2026-11-19T09:00:00.000Z"
+        '401':
+          description: Unauthorized (missing or invalid JWT token).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleErrorResponse'
+              example:
+                error: "Unauthorized"
+        '404':
+          description: Order not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleErrorResponse'
+              example:
+                error: "Not found"
+        '500':
+          description: Server error (e.g. non-integer ID syntax error in DB).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "invalid input syntax for type integer: \"abc\""
+                stack: "error: invalid input syntax for type integer: \"abc\"\n    at ..."
+
+  /admin/orders/{id}:
+    delete:
+      summary: Admin delete an order
+      description: |
+        Deletes an order by ID.
+        
+        **Security Warning:**
+        - **Broken Function Level Authorization (BFLA):** This endpoint has **NO authentication or authorization**. Anyone can delete any order anonymously without providing any credentials or token.
+      operationId: adminDeleteOrder
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Unique integer ID of the order to delete.
+          schema:
+            type: integer
+          example: 101
+      responses:
+        '204':
+          description: Order deleted (or ID did not exist; no rowCount check is performed).
+        '500':
+          description: Server error (e.g. non-integer ID syntax error or DB failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "invalid input syntax for type integer: \"abc\""
+                stack: "error: invalid input syntax for type integer: \"abc\"\n    at ..."
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JSON Web Token (JWT) passed in the `Authorization: Bearer <token>` header.
+        Decoded payload contains `{ id: user.id, role: user.role }`. Currently signed with hardcoded secret `secret123`.
+
+  schemas:
+    UserRegistrationRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          description: Unique email address of the user.
+          example: "customer@example.com"
+        password:
+          type: string
+          format: password
+          description: Plaintext password to be hashed using bcrypt.
+          example: "SuperSecretPassword123"
+      additionalProperties: true
+      description: |
+        User registration payload. Note: The current implementation spreads all additional properties directly into SQL columns.
+
+    UserCurrentResponse:
+      type: object
+      description: |
+        **CURRENT IMPLEMENTATION RESPONSE (INSECURE):**
+        Exposes the sensitive hashed password directly from the database due to `RETURNING *`.
+      required:
+        - id
+        - email
+        - password_hash
+        - role
+      properties:
+        id:
+          type: integer
+          description: Unique user ID generated by database sequence.
+          example: 1
+        email:
+          type: string
+          format: email
+          example: "customer@example.com"
+        password_hash:
+          type: string
+          description: |
+            **CRITICAL SECURITY RISK:** Hashed password string. Should NEVER be returned in API responses.
+          example: "$2a$10$abcdefghijklmnopqrstuv"
+        role:
+          type: string
+          description: User authorization role.
+          example: "user"
+
+    UserSecureResponse:
+      type: object
+      description: |
+        **RECOMMENDED SECURE RESPONSE:**
+        Sanitized user representation that omits `password_hash`.
+      required:
+        - id
+        - email
+        - role
+      properties:
+        id:
+          type: integer
+          description: Unique user ID generated by database sequence.
+          example: 1
+        email:
+          type: string
+          format: email
+          example: "customer@example.com"
+        role:
+          type: string
+          description: User authorization role.
+          example: "user"
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          example: "customer@example.com"
+        password:
+          type: string
+          format: password
+          example: "SuperSecretPassword123"
+
+    LoginResponse:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          description: Signed JSON Web Token for authentication.
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MSwicm9sZSI6InVzZXIifQ.signature"
+
+    Order:
+      type: object
+      required:
+        - id
+        - customer_id
+        - status
+        - amount
+        - created_at
+      properties:
+        id:
+          type: integer
+          description: Unique integer ID of the order.
+          example: 101
+        customer_id:
+          type: integer
+          description: Foreign key ID referencing the owner customer in the users table.
+          example: 1
+        status:
+          type: string
+          description: Current lifecycle status of the order (e.g. paid, pending, cancelled).
+          example: "paid"
+        amount:
+          type: string
+          description: Numeric monetary value returned as string representation from PostgreSQL numeric type.
+          example: "150.00"
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the order was created.
+          example: "2026-11-19T09:00:00.000Z"
+
+    SimpleErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message string.
+          example: "Unauthorized"
+
+    ErrorResponse:
+      type: object
+      description: |
+        Response generated by the global Express error handler:
+        `res.status(500).json({ error: err.message, stack: err.stack })`
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Unhandled error message.
+          example: "Internal Server Error"
+        stack:
+          type: string
+          description: |
+            **SECURITY RISK:** Raw stack trace leaked to caller in production.
+          example: "Error: Something went wrong\n    at server.js:45:10..."

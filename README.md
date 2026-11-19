@@ -11,6 +11,7 @@ This repo tracks my hands-on learning tasks. Each folder holds one task, with it
 | 1 | [day1-lab](day1-lab/) | Express, async error handling, event loop blocking, worker threads, VS Code debugging | ✅ Completed |
 | 2 | [node-calculator-docker-basic-p](node-calculator-docker-basic-p/) | Node `http` module, REST API, input validation, static UI, Docker | ✅ Completed |
 | 3 | [day2-lab](day2-lab/) | Heap snapshots, closure and event-listener leaks, `EXPLAIN ANALYZE`, composite indexes, PostgreSQL connection pool tuning | ✅ Completed |
+| 4 | [day3-lab](day3-lab/) | AI-assisted OpenAPI spec, Zod validation, Jest + supertest tests, manual injection/auth audit | ✅ Completed |
 
 ---
 
@@ -153,6 +154,39 @@ ON orders (customer_id, status, created_at DESC);
 
 ---
 
+## 4. day3-lab: AI-assisted API and security auditing
+
+An Express + PostgreSQL API with JWT auth. AI generated the OpenAPI spec, Zod validation and Jest tests, and I audited the output by hand for injection and auth flaws.
+
+### What it covers
+
+| Route | Purpose |
+|-------|---------|
+| `POST /users` | Register. Zod-style body check (rejects unknown keys), bcrypt hash, `409` on duplicate email. |
+| `POST /login` | Returns a 1-hour JWT. Same `401` for unknown user and wrong password. |
+| `GET /orders` | Current user's orders, filterable by status. Requires a token. |
+| `GET /orders/:id` | One order, scoped to the owner. |
+| `DELETE /admin/orders/:id` | Admin only. |
+
+Docs: `openapi.yaml` (rendered as `redoc-static.html`).
+
+### Run it
+
+```bash
+cd day3-lab
+npm install
+set JWT_SECRET=change-me && node server.js
+npm test              # Jest + supertest, coverage in coverage/
+```
+
+### What I learned
+
+- AI output is a draft: check every query is parameterised and every route has the right auth and ownership check.
+- Validate input at the edge (reject unknown keys, check types) and keep error messages generic.
+- A spec plus tests makes the audit repeatable.
+
+---
+
 ## Repo structure
 
 ```
@@ -171,6 +205,12 @@ ON orders (customer_id, status, created_at DESC);
 │   ├── NOTES.md
 │   ├── seed.sql
 │   ├── server.js
+│   └── package.json
+├── day3-lab/
+│   ├── openapi.yaml
+│   ├── redoc-static.html
+│   ├── server.js
+│   ├── server.test.js
 │   └── package.json
 └── README.md
 ```
